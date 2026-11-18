@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tactile-matrix"
+version = "0.1.0"
+description = "Serial acquisition and visualization for a 7 × 7 tactile sensor array"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["matplotlib>=3.6", "numpy>=1.22", "pyserial>=3.5"]
+
+[project.optional-dependencies]
+figures = ["pillow>=9.1"]
+
+[tool.setuptools]
+packages = ["tactile"]
+
+[tool.setuptools.package-data]
+tactile = ["templates/*.in"]

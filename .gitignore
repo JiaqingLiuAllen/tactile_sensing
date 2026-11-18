@@ -1,0 +1,22 @@
+# Local recordings and exported replays
+/data/
+/recordings/
+/[0-9][0-9][0-9][0-9]_*_test/
+*.csv
+*.tsv
+*.npy
+*.npz
+*.parquet
+*.h5
+*.bin
+*.html
+
+# Python, firmware builds, and editor state
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.DS_Store

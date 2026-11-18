@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>7x7 Matrix Replay</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 18px;
+      background: #f6f7f9;
+      color: #1f2933;
+    }
+    .panel {
+      max-width: 1880px;
+      margin: 0 auto;
+      background: white;
+      border: 1px solid #d9dee7;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+      padding: 18px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 20px;
+      font-weight: 650;
+    }
+    .meta {
+      color: #52606d;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .plots {
+      display: grid;
+      grid-template-columns: 1fr 1.12fr 1.55fr;
+      gap: 14px;
+      align-items: stretch;
+    }
+    .plotBox {
+      border: 1px solid #e1e6ef;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fbfcfe;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .plotTitle {
+      font-size: 14px;
+      font-weight: 650;
+      margin: 0 0 8px;
+      min-height: 18px;
+    }
+    .canvasHost {
+      height: 500px;
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+    }
+    canvas {
+      display: block;
+      border-radius: 8px;
+      background: #e8eef5;
+      width: 100%;
+      height: 500px;
+    }
+    .surfaceHost canvas {
+      flex: 1;
+      min-width: 0;
+    }
+    .zoomBtns {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+      flex: 0 0 auto;
+    }
+    .zoomBtns button {
+      width: 42px;
+      height: 42px;
+      font-size: 22px;
+      font-weight: 650;
+      line-height: 1;
+    }
+    #surface {
+      cursor: grab;
+      touch-action: none;
+    }
+    #surface.dragging {
+      cursor: grabbing;
+    }
+    .controls {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: auto auto auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+    button, select {
+      border: 1px solid #b8c2cc;
+      border-radius: 8px;
+      background: white;
+      color: #1f2933;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+    button:hover {
+      background: #f0f4f8;
+    }
+    input[type="range"] {
+      width: 100%;
+    }
+    .readout {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #334e68;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+    @media (max-width: 1100px) {
+      .plots { grid-template-columns: 1fr; }
+      .controls { grid-template-columns: auto auto auto 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>7x7 Matrix Replay</h1>
+    <div class="meta" id="meta"></div>
+
+    <div class="plots">
+      <div class="plotBox">
+        <div class="plotTitle">2D deformation ΔV</div>
+        <div class="canvasHost">
+          <canvas id="heatmap" width="500" height="500"></canvas>
+        </div>
+      </div>
+      <div class="plotBox">
+        <div class="plotTitle">3D deformation bars</div>
+        <div class="canvasHost">
+          <canvas id="bars" width="640" height="500"></canvas>
+        </div>
+      </div>
+      <div class="plotBox">
+        <div class="plotTitle">Panel dent surface · drag to rotate</div>
+        <div class="canvasHost surfaceHost">
+          <canvas id="surface" width="760" height="500"></canvas>
+          <div class="zoomBtns">
+            <button id="zoomIn" type="button">+</button>
+            <button id="zoomOut" type="button">−</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="prevBtn" type="button">Prev</button>
+      <button id="playBtn" type="button">Play</button>
+      <button id="nextBtn" type="button">Next</button>
+      <input id="slider" type="range" min="0" max="0" value="0" step="1">
+      <select id="speed">
+        <option value="0.25">0.25x</option>
+        <option value="0.5">0.5x</option>
+        <option value="1" selected>1x</option>
+        <option value="2">2x</option>
+        <option value="4">4x</option>
+      </select>
+    </div>
+    <div class="readout" id="readout"></div>
+  </div>
+
+  <script>
+    const DATA = __DATA_JSON__;
+    const rows = DATA.rows;
+    const cols = DATA.cols;
+    const unit = DATA.unit || "V";
+    const xLabels = DATA.x_labels;
+    const yLabels = DATA.y_labels;
+    const colorStops = DATA.color_stops;
+    const baseline = DATA.baseline || DATA.frames[0].values.map(() => 0);
+    const heatmap = document.getElementById("heatmap");
+    const heatCtx = heatmap.getContext("2d");
+    const bars = document.getElementById("bars");
+    const barCtx = bars.getContext("2d");
+    const surface = document.getElementById("surface");
+    const surfCtx = surface.getContext("2d");
+    const slider = document.getElementById("slider");
+    const playBtn = document.getElementById("playBtn");
+    const speedSelect = document.getElementById("speed");
+    const readout = document.getElementById("readout");
+    const meta = document.getElementById("meta");
+
+    let frameIndex = 0;
+    let playing = false;
+    let timer = null;
+    let zoom = 1.0;
+    let dragging = false;
+    let lastPointer = null;
+    let rot = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+    slider.max = Math.max(DATA.frames.length - 1, 0);
+    meta.textContent = `${DATA.source_name} | ${DATA.frames.length} frames | ${DATA.duration_sec.toFixed(3)} s | ${DATA.nominal_fps.toFixed(1)} fps | ΔV ${DATA.vmin.toFixed(3)} to ${DATA.vmax.toFixed(3)} V vs rest | aligned to physical panel`;
+
+    function clamp(value, lo, hi) {
+      return Math.max(lo, Math.min(hi, value));
+    }
+
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+
+    function rotX(a) {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [[1, 0, 0], [0, c, -s], [0, s, c]];
+    }
+
+    function rotY(a) {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+    }
+
+    function mulMat(a, b) {
+      const out = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+      }
+      return out;
+    }
+
+    function mulVec(m, v) {
+      return [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
+      ];
+    }
+
+    rot = mulMat(rotX(-0.95), rotY(0.70));
+
+    function storedIndex(displayRow, displayCol) {
+      return displayCol * cols + displayRow;
+    }
+
+    function makeDeform(frame) {
+      const deltas = frame.values.map((value, idx) => value - baseline[idx]);
+      const sorted = deltas.slice().sort((a, b) => a - b);
+      const median = sorted[(sorted.length - 1) >> 1];
+      return deltas.map((delta) => delta - median);
+    }
+
+    function deformValue(deform, displayRow, displayCol) {
+      return deform[storedIndex(displayRow, displayCol)];
+    }
+
+    function formatDelta(value) {
+      return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+    }
+
+    function currentScale() {
+      return [DATA.vmin, DATA.vmax];
+    }
+
+    function colorFor(value, vmin, vmax) {
+      const t = clamp((value - vmin) / (vmax - vmin || 1), 0, 1);
+      let i = 0;
+      while (i < colorStops.length - 2 && t > colorStops[i + 1][0]) i += 1;
+      const a = colorStops[i];
+      const b = colorStops[i + 1];
+      const local = (t - a[0]) / ((b[0] - a[0]) || 1);
+      const ca = hexToRgb(a[1]);
+      const cb = hexToRgb(b[1]);
+      return `rgb(${Math.round(lerp(ca[0], cb[0], local))},${Math.round(lerp(ca[1], cb[1], local))},${Math.round(lerp(ca[2], cb[2], local))})`;
+    }
+
+    function textColorFor(rgb) {
+      const nums = rgb.match(/\d+/g).map(Number);
+      const lum = 0.299 * nums[0] + 0.587 * nums[1] + 0.114 * nums[2];
+      return lum > 155 ? "#111827" : "#f8fafc";
+    }
+
+    function shadeColor(rgb, factor) {
+      const nums = rgb.match(/\d+/g).map(Number);
+      return `rgb(${nums.map(v => Math.round(clamp(v * factor, 0, 255))).join(",")})`;
+    }
+
+    function drawHeatmap(deform, vmin, vmax) {
+      const pad = 52;
+      const grid = Math.min(heatmap.width - pad * 1.6, heatmap.height - pad * 1.7);
+      const cell = grid / rows;
+      const x0 = pad;
+      const y0 = pad * 0.7;
+      heatCtx.clearRect(0, 0, heatmap.width, heatmap.height);
+      heatCtx.font = "12px -apple-system, BlinkMacSystemFont, sans-serif";
+      heatCtx.textAlign = "center";
+      heatCtx.textBaseline = "middle";
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const value = deformValue(deform, r, c);
+          const x = x0 + c * cell;
+          const y = y0 + r * cell;
+          const color = colorFor(value, vmin, vmax);
+          heatCtx.fillStyle = color;
+          heatCtx.fillRect(x, y, cell, cell);
+          heatCtx.strokeStyle = "rgba(255,255,255,0.85)";
+          heatCtx.strokeRect(x, y, cell, cell);
+          heatCtx.fillStyle = textColorFor(color);
+          heatCtx.fillText(formatDelta(value), x + cell / 2, y + cell / 2);
+        }
+      }
+
+      heatCtx.fillStyle = "#334e68";
+      for (let c = 0; c < cols; c++) {
+        heatCtx.fillText(xLabels[c], x0 + c * cell + cell / 2, y0 + grid + 18);
+      }
+      for (let r = 0; r < rows; r++) {
+        heatCtx.fillText(yLabels[r], x0 - 20, y0 + r * cell + cell / 2);
+      }
+      heatCtx.font = "11px -apple-system, BlinkMacSystemFont, sans-serif";
+      heatCtx.fillText(DATA.x_axis, x0 + grid / 2, y0 + grid + 38);
+    }
+
+    function projectBar(col, row) {
+      const originX = bars.width * 0.50;
+      const originY = bars.height * 0.30;
+      const stepX = 36;
+      const stepY = 16;
+      return {
+        x: originX + (col - row) * stepX,
+        y: originY + (col + row) * stepY * 0.55
+      };
+    }
+
+    function drawBar(base, width, depth, height, color) {
+      const y0 = base.y;
+      const y1 = base.y - height;
+      const topY = Math.min(y0, y1);
+      const botY = Math.max(y0, y1);
+      const h = botY - topY;
+      barCtx.fillStyle = shadeColor(color, 0.78);
+      barCtx.beginPath();
+      barCtx.moveTo(base.x - width / 2, botY);
+      barCtx.lineTo(base.x + width / 2, botY);
+      barCtx.lineTo(base.x + width / 2, topY);
+      barCtx.lineTo(base.x - width / 2, topY);
+      barCtx.closePath();
+      barCtx.fill();
+
+      barCtx.fillStyle = shadeColor(color, 0.60);
+      barCtx.beginPath();
+      barCtx.moveTo(base.x + width / 2, botY);
+      barCtx.lineTo(base.x + width / 2 + depth, botY - depth * 0.55);
+      barCtx.lineTo(base.x + width / 2 + depth, topY - depth * 0.55);
+      barCtx.lineTo(base.x + width / 2, topY);
+      barCtx.closePath();
+      barCtx.fill();
+
+      barCtx.fillStyle = color;
+      barCtx.beginPath();
+      barCtx.moveTo(base.x - width / 2, topY);
+      barCtx.lineTo(base.x + width / 2, topY);
+      barCtx.lineTo(base.x + width / 2 + depth, topY - depth * 0.55);
+      barCtx.lineTo(base.x - width / 2 + depth, topY - depth * 0.55);
+      barCtx.closePath();
+      barCtx.fill();
+
+      barCtx.strokeStyle = "rgba(15,23,42,0.18)";
+      barCtx.strokeRect(base.x - width / 2, topY, width, h);
+    }
+
+    function drawBars(deform, vmin, vmax) {
+      barCtx.clearRect(0, 0, bars.width, bars.height);
+      barCtx.font = "11px -apple-system, BlinkMacSystemFont, sans-serif";
+      barCtx.textAlign = "center";
+      barCtx.textBaseline = "bottom";
+
+      const maxBarHeight = 120;
+      const barWidth = 23;
+      const barDepth = 16;
+      const absLimit = Math.max(Math.abs(vmin), Math.abs(vmax), 1e-6);
+      const ordered = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          ordered.push({r, c, order: r + c});
+        }
+      }
+      ordered.sort((a, b) => a.order - b.order);
+
+      for (const cell of ordered) {
+        const value = deformValue(deform, cell.r, cell.c);
+        const h = (value / absLimit) * maxBarHeight;
+        const base = projectBar(cell.c, cell.r);
+        const color = colorFor(value, vmin, vmax);
+        drawBar(base, barWidth, barDepth, h, color);
+        barCtx.fillStyle = "#111827";
+        const labelY = h >= 0
+          ? base.y - h - barDepth * 0.55 - 3
+          : base.y - h + 12;
+        barCtx.fillText(formatDelta(value), base.x + barDepth / 2, labelY);
+      }
+
+      barCtx.fillStyle = "#334e68";
+      barCtx.textBaseline = "middle";
+      barCtx.fillText("ΔV bars, 0 = rest", bars.width / 2, 22);
+    }
+
+    function interpGrid(deform, n) {
+      const grid = [];
+      for (let i = 0; i < n; i++) {
+        const u = i / (n - 1) * (rows - 1);
+        const r0 = Math.min(rows - 1, Math.floor(u));
+        const r1 = Math.min(rows - 1, r0 + 1);
+        const fr = u - r0;
+        const row = [];
+        for (let j = 0; j < n; j++) {
+          const v = j / (n - 1) * (cols - 1);
+          const c0 = Math.min(cols - 1, Math.floor(v));
+          const c1 = Math.min(cols - 1, c0 + 1);
+          const fc = v - c0;
+          const z00 = deformValue(deform, r0, c0);
+          const z01 = deformValue(deform, r0, c1);
+          const z10 = deformValue(deform, r1, c0);
+          const z11 = deformValue(deform, r1, c1);
+          row.push(
+            z00 * (1 - fr) * (1 - fc) +
+            z01 * (1 - fr) * fc +
+            z10 * fr * (1 - fc) +
+            z11 * fr * fc
+          );
+        }
+        grid.push(row);
+      }
+      return grid;
+    }
+
+    function project3d(x, y, z) {
+      const v = mulVec(rot, [x, y, z]);
+      const cam = 4.2;
+      const persp = cam / Math.max(0.9, cam - v[2]);
+      const s = 0.46 * Math.min(surface.width, surface.height) * zoom * persp;
+      return {
+        x: surface.width / 2 + v[0] * s,
+        y: surface.height * 0.58 - v[1] * s,
+        depth: v[2]
+      };
+    }
+
+    function drawSurface(deform, vmin, vmax) {
+      const n = 22;
+      const grid = interpGrid(deform, n);
+      const absLimit = Math.max(Math.abs(vmin), Math.abs(vmax), 1e-6);
+      surfCtx.clearRect(0, 0, surface.width, surface.height);
+      surfCtx.fillStyle = "#3d4f61";
+      surfCtx.font = "13px -apple-system, BlinkMacSystemFont, sans-serif";
+      surfCtx.textAlign = "center";
+      surfCtx.fillText("+ / − zoom · downward dent = more negative ΔV", surface.width / 2, 22);
+
+      const heightOf = (value) => (value / absLimit) * 1.15;
+      const faces = [];
+      for (let i = 0; i < n - 1; i++) {
+        for (let j = 0; j < n - 1; j++) {
+          const p00 = [-1 + 2 * j / (n - 1), heightOf(grid[i][j]), 1 - 2 * i / (n - 1)];
+          const p10 = [-1 + 2 * (j + 1) / (n - 1), heightOf(grid[i][j + 1]), 1 - 2 * i / (n - 1)];
+          const p01 = [-1 + 2 * j / (n - 1), heightOf(grid[i + 1][j]), 1 - 2 * (i + 1) / (n - 1)];
+          const p11 = [-1 + 2 * (j + 1) / (n - 1), heightOf(grid[i + 1][j + 1]), 1 - 2 * (i + 1) / (n - 1)];
+          const q00 = project3d(p00[0], p00[1], p00[2]);
+          const q10 = project3d(p10[0], p10[1], p10[2]);
+          const q01 = project3d(p01[0], p01[1], p01[2]);
+          const q11 = project3d(p11[0], p11[1], p11[2]);
+          const zMid = (grid[i][j] + grid[i][j + 1] + grid[i + 1][j] + grid[i + 1][j + 1]) / 4;
+          const depth = (q00.depth + q10.depth + q01.depth + q11.depth) / 4;
+          const ux = p10[0] - p00[0], uy = p10[1] - p00[1], uz = p10[2] - p00[2];
+          const vx = p01[0] - p00[0], vy = p01[1] - p00[1], vz = p01[2] - p00[2];
+          const nx = uy * vz - uz * vy;
+          const ny = uz * vx - ux * vz;
+          const nz = ux * vy - uy * vx;
+          const nlen = Math.hypot(nx, ny, nz) || 1;
+          const light = clamp(0.55 + 0.55 * (ny / nlen), 0.42, 1.12);
+          faces.push({q00, q10, q01, q11, depth, color: shadeColor(colorFor(zMid, vmin, vmax), light)});
+        }
+      }
+      faces.sort((a, b) => a.depth - b.depth);
+      for (const face of faces) {
+        surfCtx.beginPath();
+        surfCtx.moveTo(face.q00.x, face.q00.y);
+        surfCtx.lineTo(face.q10.x, face.q10.y);
+        surfCtx.lineTo(face.q11.x, face.q11.y);
+        surfCtx.lineTo(face.q01.x, face.q01.y);
+        surfCtx.closePath();
+        surfCtx.fillStyle = face.color;
+        surfCtx.fill();
+        surfCtx.strokeStyle = "rgba(35, 52, 70, 0.28)";
+        surfCtx.lineWidth = 0.8;
+        surfCtx.stroke();
+      }
+
+      surfCtx.lineWidth = 1.6;
+      surfCtx.strokeStyle = "rgba(27, 43, 61, 0.55)";
+      for (let r = 0; r < rows; r++) {
+        surfCtx.beginPath();
+        for (let c = 0; c < cols; c++) {
+          const p = project3d(-1 + 2 * c / (cols - 1), heightOf(deformValue(deform, r, c)), 1 - 2 * r / (rows - 1));
+          if (c === 0) surfCtx.moveTo(p.x, p.y);
+          else surfCtx.lineTo(p.x, p.y);
+        }
+        surfCtx.stroke();
+      }
+      for (let c = 0; c < cols; c++) {
+        surfCtx.beginPath();
+        for (let r = 0; r < rows; r++) {
+          const p = project3d(-1 + 2 * c / (cols - 1), heightOf(deformValue(deform, r, c)), 1 - 2 * r / (rows - 1));
+          if (r === 0) surfCtx.moveTo(p.x, p.y);
+          else surfCtx.lineTo(p.x, p.y);
+        }
+        surfCtx.stroke();
+      }
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const value = deformValue(deform, r, c);
+          const p = project3d(-1 + 2 * c / (cols - 1), heightOf(value), 1 - 2 * r / (rows - 1));
+          surfCtx.beginPath();
+          surfCtx.arc(p.x, p.y, 3.2, 0, Math.PI * 2);
+          surfCtx.fillStyle = colorFor(value, vmin, vmax);
+          surfCtx.fill();
+          surfCtx.strokeStyle = "rgba(15,23,42,0.45)";
+          surfCtx.lineWidth = 1;
+          surfCtx.stroke();
+        }
+      }
+
+      surfCtx.fillStyle = "#334e68";
+      surfCtx.font = "12px -apple-system, BlinkMacSystemFont, sans-serif";
+      const corners = [
+        [project3d(-1, 0, 1), "top left"],
+        [project3d(1, 0, 1), "top right"],
+        [project3d(-1, 0, -1), "lower left"],
+        [project3d(1, 0, -1), "lower right"]
+      ];
+      for (const [p, label] of corners) {
+        surfCtx.fillText(label, p.x, p.y + 16);
+      }
+    }
+
+    function render(index) {
+      frameIndex = clamp(index, 0, DATA.frames.length - 1);
+      const frame = DATA.frames[frameIndex];
+      const deform = makeDeform(frame);
+      const [vmin, vmax] = currentScale();
+      drawHeatmap(deform, vmin, vmax);
+      drawBars(deform, vmin, vmax);
+      drawSurface(deform, vmin, vmax);
+      slider.value = frameIndex;
+      const deviceInfo = [];
+      if (frame.device_t !== null && frame.device_t !== undefined) {
+        deviceInfo.push(`device t=${frame.device_t.toFixed(3)}s`);
+      }
+      if (frame.device_frame !== null && frame.device_frame !== undefined) {
+        deviceInfo.push(`device frame=${frame.device_frame}`);
+      }
+      const deformVals = deform;
+      const fields = [
+        `frame ${frameIndex + 1}/${DATA.frames.length}`,
+        `recorded t=${frame.t.toFixed(3)}s`,
+        ...deviceInfo,
+        frame.timestamp ? frame.timestamp : "",
+        `ΔV min=${Math.min(...deformVals).toFixed(3)}`,
+        `ΔV max=${Math.max(...deformVals).toFixed(3)}`,
+        `center ΔV=${deformValue(deform, 3, 3).toFixed(3)}`
+      ].filter(Boolean);
+      readout.replaceChildren(...fields.map(text => {
+        const item = document.createElement("span");
+        item.textContent = text;
+        return item;
+      }));
+    }
+
+    function playNext() {
+      if (!playing) return;
+      if (frameIndex >= DATA.frames.length - 1) {
+        playing = false;
+        playBtn.textContent = "Play";
+        return;
+      }
+      render(frameIndex + 1);
+      const speed = Number(speedSelect.value) || 1;
+      timer = setTimeout(playNext, Math.max(1, DATA.frame_interval_ms / speed));
+    }
+
+    playBtn.addEventListener("click", () => {
+      playing = !playing;
+      playBtn.textContent = playing ? "Pause" : "Play";
+      if (playing) playNext();
+      else if (timer) clearTimeout(timer);
+    });
+    document.getElementById("prevBtn").addEventListener("click", () => render(frameIndex - 1));
+    document.getElementById("nextBtn").addEventListener("click", () => render(frameIndex + 1));
+    slider.addEventListener("input", () => render(Number(slider.value)));
+
+    function setZoom(next) {
+      zoom = clamp(next, 0.35, 3.2);
+      render(frameIndex);
+    }
+    document.getElementById("zoomIn").addEventListener("click", () => setZoom(zoom * 1.18));
+    document.getElementById("zoomOut").addEventListener("click", () => setZoom(zoom / 1.18));
+    surface.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      setZoom(zoom * (event.deltaY < 0 ? 1.08 : 1 / 1.08));
+    }, {passive: false});
+
+    surface.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      lastPointer = {x: event.clientX, y: event.clientY};
+      surface.classList.add("dragging");
+      surface.setPointerCapture(event.pointerId);
+    });
+    function endDrag() {
+      dragging = false;
+      lastPointer = null;
+      surface.classList.remove("dragging");
+    }
+    surface.addEventListener("pointerup", endDrag);
+    surface.addEventListener("pointercancel", endDrag);
+    surface.addEventListener("pointermove", (event) => {
+      if (!dragging || !lastPointer) return;
+      const dx = event.clientX - lastPointer.x;
+      const dy = event.clientY - lastPointer.y;
+      rot = mulMat(rotY(dx * 0.01), rot);
+      rot = mulMat(rotX(dy * 0.01), rot);
+      lastPointer = {x: event.clientX, y: event.clientY};
+      render(frameIndex);
+    });
+
+    render(0);
+  </script>
+</body>
+</html>
